@@ -1,0 +1,725 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>PI Racing – S/F/D/I Coins</title>
+  <style>
+    body {
+      margin: 0;
+      background: #111;
+      color: #eee;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    header {
+      margin-top: 12px;
+      text-align: center;
+    }
+    #main {
+      margin-top: 12px;
+      display: flex;
+      gap: 16px;
+      align-items: flex-start;
+    }
+    #game-column {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    #hud {
+      margin-bottom: 8px;
+      font-size: 14px;
+    }
+    canvas {
+      background: #222;
+      border: 2px solid #555;
+    }
+    #sidebar-left,
+    #sidebar-right {
+      width: 230px;
+      font-size: 13px;
+      line-height: 1.4;
+    }
+    #sidebar-left h3,
+    #sidebar-right h3 {
+      margin-top: 0;
+      margin-bottom: 6px;
+      font-size: 15px;
+    }
+    #sidebar-right ol {
+      padding-left: 20px;
+      margin: 4px 0 0 0;
+    }
+    #sidebar-right li {
+      margin-bottom: 2px;
+    }
+    .legend {
+      margin-top: 8px;
+      font-size: 13px;
+    }
+    .legend span {
+      display: inline-block;
+      margin: 0 6px;
+    }
+    .dot {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      margin-right: 4px;
+      vertical-align: middle;
+    }
+    #btn-start {
+      margin-top: 8px;
+      padding: 6px 16px;
+      font-size: 14px;
+      border-radius: 4px;
+      border: none;
+      background: #29B6F6;
+      color: #000;
+      cursor: pointer;
+    }
+    #btn-start:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Taskmaster PI Planning Game</h1>
+    <div>Arrow keys to steer the boat • Collect Stories & Features, avoid Defects & Incidents</div>
+  </header>
+
+  <div id="main">
+    <aside id="sidebar-left">
+      <h3>Levels</h3>
+      <p><strong>Level 1</strong>: Static items. Collect all Stories (S) and Features (F) as fast as you can.</p>
+      <p><strong>Level 2</strong>: Items move slowly and bounce off the walls.</p>
+      <p><strong>Level 3</strong>: Moving items + hazards:<br>
+      - Defect (D): speed limited to 50% for 3s.<br>
+      - Incident (I): lose a life and respawn; 3 lives total.</p>
+      <p>The level ends when all Stories & Features are collected.</p>
+    </aside>
+
+    <section id="game-column">
+      <div id="hud">
+        Level: <span id="hud-level">1</span> •
+        Time: <span id="hud-time">00:00.0</span> •
+        Speed: <span id="hud-speed">0</span> • Score: <span id="hud-score">0</span> •
+        Lives: <span id="hud-lives">-</span><br>
+        S: <span id="hud-s">0</span> F: <span id="hud-f">0</span> D: <span id="hud-d">0</span> I: <span id="hud-i">0</span>
+      </div>
+
+      <canvas id="game" width="900" height="600"></canvas>
+
+      <button id="btn-start">Start</button>
+
+      <div class="legend">
+        <span><span class="dot" style="background:#FFD54F"></span>S = Story (good, small boost)</span>
+        <span><span class="dot" style="background:#FFA726"></span>F = Feature (good, big boost)</span>
+        <span><span class="dot" style="background:#AB47BC"></span>D = Defect (bad, slow)</span>
+        <span><span class="dot" style="background:#EF5350"></span>I = Incident (bad, hard brake)</span>
+      </div>
+    </section>
+
+    <aside id="sidebar-right">
+      <h3>High Scores</h3>
+      <ol id="highscore-list"></ol>
+    </aside>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const startButton = document.getElementById('btn-start');
+
+    // Simple top‑down boat
+    const car = {
+      x: canvas.width / 2,
+      y: canvas.height - 80,
+      angle: -Math.PI / 2,
+      speed: 0,
+      maxSpeed: 6,
+      accel: 0.18,
+      friction: 0.05,
+      turnSpeed: 0.06,
+      width: 40,
+      height: 18
+    };
+
+    const keys = {};
+    window.addEventListener('keydown', (e) => {
+      keys[e.code] = true;
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) {
+        e.preventDefault();
+      }
+    });
+    window.addEventListener('keyup', (e) => {
+      keys[e.code] = false;
+    });
+
+    // Item types: S/F/D/I
+    const itemTypes = {
+      story: {
+        label: 'S',
+        color: '#FFD54F', // yellow
+        kind: 'good',
+        scoreDelta: 5,
+        speedDelta: 1.0
+      },
+      feature: {
+        label: 'F',
+        color: '#FFA726', // orange
+        kind: 'good',
+        scoreDelta: 10,
+        speedDelta: 1.5
+      },
+      defect: {
+        label: 'D',
+        color: '#AB47BC', // purple
+        kind: 'bad',
+        scoreDelta: -3,
+        speedDelta: -2.5
+      },
+      incident: {
+        label: 'I',
+        color: '#EF5350', // red
+        kind: 'bad',
+        scoreDelta: -10,
+        speedDelta: -3.5
+      }
+    };
+
+    const items = [];
+    const radius = 13;
+    let level = 1; // 1, 2 or 3
+
+    function randomTrackPoint() {
+      // Rough "track" corridor
+      const marginX = 80;
+      const marginY = 60;
+      return {
+        x: marginX + Math.random() * (canvas.width - marginX * 2),
+        y: marginY + Math.random() * (canvas.height - marginY * 2)
+      };
+    }
+
+    function spawnItems() {
+      items.length = 0;
+      const counts = {
+        story: 10,
+        feature: 6,
+        defect: 6,
+        incident: 4
+      };
+
+      Object.keys(counts).forEach((typeKey) => {
+        const n = counts[typeKey];
+        for (let i = 0; i < n; i++) {
+          const p = randomTrackPoint();
+          items.push({
+            x: p.x,
+            y: p.y,
+            r: radius,
+            type: typeKey,
+            vx: 0,
+            vy: 0
+          });
+        }
+      });
+
+      // For moving levels, make all items move slowly
+      if (level >= 2) {
+        for (const it of items) {
+          const angle = Math.random() * Math.PI * 2;
+          const speed = 0.04 + Math.random() * 0.03; // pixels per ms
+          it.vx = Math.cos(angle) * speed;
+          it.vy = Math.sin(angle) * speed;
+        }
+      }
+    }
+
+    spawnItems();
+
+    const hudLevel = document.getElementById('hud-level');
+    const hudTime = document.getElementById('hud-time');
+    const hudSpeed = document.getElementById('hud-speed');
+    const hudScore = document.getElementById('hud-score');
+    const hudLives = document.getElementById('hud-lives');
+    const hudS = document.getElementById('hud-s');
+    const hudF = document.getElementById('hud-f');
+    const hudD = document.getElementById('hud-d');
+    const hudI = document.getElementById('hud-i');
+    const highscoreList = document.getElementById('highscore-list');
+
+    const stats = {
+      score: 0,
+      S: 0,
+      F: 0,
+      D: 0,
+      I: 0
+    };
+
+    let elapsedMs = 0;
+    let totalScore = 0;
+    let gameState = 'idle'; // idle | countdown | running | respawn | finished
+    let countdownMs = 0;
+    let lastTimestamp = null;
+    let lives = 0;
+    let respawnMs = 0;
+    let speedFactor = 1;
+    let slowUntilMs = 0;
+    let runFailed = false; // true when level 3 ended by death
+
+    let highScores = [];
+
+    function loadHighScores() {
+      try {
+        const raw = localStorage.getItem('piFlowRegattaHighscores');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) highScores = parsed;
+        }
+      } catch (e) {
+        highScores = [];
+      }
+    }
+
+    function saveHighScores() {
+      try {
+        localStorage.setItem('piFlowRegattaHighscores', JSON.stringify(highScores));
+      } catch (e) {
+        // ignore storage errors
+      }
+    }
+
+    function renderHighScores() {
+      if (!highscoreList) return;
+      highscoreList.innerHTML = '';
+      highScores
+        .slice()
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 5)
+        .forEach((entry, index) => {
+          const li = document.createElement('li');
+          li.textContent = `${entry.score}`;
+          highscoreList.appendChild(li);
+        });
+    }
+
+    function addHighScore(score) {
+      highScores.push({ score });
+      highScores.sort((a, b) => b.score - a.score);
+      highScores = highScores.slice(0, 5);
+      saveHighScores();
+      renderHighScores();
+    }
+
+    function formatTime(ms) {
+      const totalSeconds = ms / 1000;
+      const minutes = Math.floor(totalSeconds / 60);
+      const seconds = Math.floor(totalSeconds % 60);
+      const tenths = Math.floor((totalSeconds - Math.floor(totalSeconds)) * 10);
+      const mm = String(minutes).padStart(2, '0');
+      const ss = String(seconds).padStart(2, '0');
+      return `${mm}:${ss}.${tenths}`;
+    }
+
+    function updateHUD() {
+      hudLevel.textContent = String(level);
+      hudTime.textContent = formatTime(elapsedMs);
+      hudSpeed.textContent = Math.abs(car.speed).toFixed(1);
+      hudScore.textContent = stats.score;
+      hudS.textContent = stats.S;
+      hudF.textContent = stats.F;
+      hudD.textContent = stats.D;
+      hudI.textContent = stats.I;
+      hudLives.textContent = level === 3 ? String(lives) : '–';
+    }
+
+    function resetLevel() {
+      stats.score = 0;
+      stats.S = 0;
+      stats.F = 0;
+      stats.D = 0;
+      stats.I = 0;
+      elapsedMs = 0;
+      runFailed = false;
+      speedFactor = 1;
+      slowUntilMs = 0;
+      lives = level === 3 ? 3 : 0;
+      car.x = canvas.width / 2;
+      car.y = canvas.height - 80;
+      car.angle = -Math.PI / 2;
+      car.speed = 0;
+      spawnItems();
+      updateHUD();
+    }
+
+    function hasRemainingGoodItems() {
+      for (const it of items) {
+        if (it.type === 'story' || it.type === 'feature') {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    startButton.addEventListener('click', () => {
+      if (gameState === 'countdown') return;
+
+      // Advance or reset level depending on where we are
+      if (gameState === 'finished') {
+        if (level === 1) {
+          level = 2;
+        } else if (level === 2) {
+          level = 3;
+        } else {
+          // run completed (or failed) -> new run
+          level = 1;
+          totalScore = 0;
+        }
+      }
+
+      resetLevel();
+      gameState = 'countdown';
+      countdownMs = 3000;
+      startButton.disabled = true;
+      startButton.textContent = 'Starting...';
+    });
+
+    function applyTimeBonus() {
+      const seconds = elapsedMs / 1000;
+      const fullSeconds = Math.floor(seconds);
+      const diff = 60 - fullSeconds; // < 60 -> positive, > 60 -> negative
+      stats.score += diff;
+    }
+
+    function finishLevel() {
+      applyTimeBonus();
+      totalScore += stats.score;
+      gameState = 'finished';
+      car.speed = 0;
+      startButton.disabled = false;
+
+      if (level === 1) {
+        startButton.textContent = 'Start level 2';
+      } else if (level === 2) {
+        startButton.textContent = 'Start level 3';
+      } else {
+        startButton.textContent = 'Play again';
+        addHighScore(totalScore);
+      }
+    }
+
+    function update(dt) {
+      if (gameState === 'countdown') {
+        countdownMs -= dt;
+        if (countdownMs <= 0) {
+          countdownMs = 0;
+          gameState = 'running';
+          startButton.textContent = 'Running';
+        }
+      }
+
+      if (gameState === 'running') {
+        // stopwatch only runs while game is active
+        elapsedMs += dt;
+
+        if (level === 3 && speedFactor < 1 && elapsedMs >= slowUntilMs) {
+          speedFactor = 1;
+        }
+
+        const accelFactor = level === 3 ? speedFactor : 1;
+        const maxSpeedFactor = level === 3 ? speedFactor : 1;
+
+        // Acceleration / braking
+        if (keys['ArrowUp']) car.speed += car.accel * accelFactor;
+        if (keys['ArrowDown']) car.speed -= car.accel * 1.1;
+
+        // Clamp speed
+        const maxSpeed = car.maxSpeed * maxSpeedFactor;
+        if (car.speed > maxSpeed) car.speed = maxSpeed;
+        if (car.speed < -maxSpeed / 2) car.speed = -maxSpeed / 2;
+
+        // Friction
+        if (!keys['ArrowUp'] && !keys['ArrowDown']) {
+          if (car.speed > 0) car.speed = Math.max(0, car.speed - car.friction);
+          if (car.speed < 0) car.speed = Math.min(0, car.speed + car.friction);
+        }
+
+        // Turning
+        if (car.speed !== 0) {
+          if (keys['ArrowLeft']) car.angle -= car.turnSpeed;
+          if (keys['ArrowRight']) car.angle += car.turnSpeed;
+        }
+
+        // Movement
+        car.x += Math.cos(car.angle) * car.speed;
+        car.y += Math.sin(car.angle) * car.speed;
+
+        // Bounds for boat
+        const boundsMargin = 24;
+        if (car.x < boundsMargin) car.x = boundsMargin;
+        if (car.x > canvas.width - boundsMargin) car.x = canvas.width - boundsMargin;
+        if (car.y < boundsMargin) car.y = boundsMargin;
+        if (car.y > canvas.height - boundsMargin) car.y = canvas.height - boundsMargin;
+
+        // Move items for moving levels (slowly bouncing)
+        if (level >= 2) {
+          const minX = radius + 40;
+          const maxX = canvas.width - radius - 40;
+          const minY = radius + 40;
+          const maxY = canvas.height - radius - 80;
+          for (const it of items) {
+            it.x += it.vx * dt;
+            it.y += it.vy * dt;
+            if (it.x < minX) {
+              it.x = minX;
+              it.vx *= -1;
+            } else if (it.x > maxX) {
+              it.x = maxX;
+              it.vx *= -1;
+            }
+            if (it.y < minY) {
+              it.y = minY;
+              it.vy *= -1;
+            } else if (it.y > maxY) {
+              it.y = maxY;
+              it.vy *= -1;
+            }
+          }
+        }
+
+        // Item collisions (treat boat as circle at center for simplicity)
+        const carRadius = Math.max(car.width, car.height) * 0.5;
+        for (let i = items.length - 1; i >= 0; i--) {
+          const it = items[i];
+          const dx = car.x - it.x;
+          const dy = car.y - it.y;
+          const dist = Math.hypot(dx, dy);
+          if (dist < carRadius + it.r) {
+            const def = itemTypes[it.type];
+            stats.score += def.scoreDelta;
+            if (def.label === 'S') stats.S += 1;
+            if (def.label === 'F') stats.F += 1;
+            if (def.label === 'D') stats.D += 1;
+            if (def.label === 'I') stats.I += 1;
+
+            // Level 3 special effects
+            if (level === 3 && def.label === 'D') {
+              speedFactor = 0.5;
+              slowUntilMs = elapsedMs + 3000;
+            }
+
+            if (level === 3 && def.label === 'I') {
+              lives = Math.max(0, lives - 1);
+              // remove the incident coin
+              items.splice(i, 1);
+
+              if (lives === 0) {
+                // Game over, keep only score from previous levels
+                runFailed = true;
+                gameState = 'finished';
+                car.speed = 0;
+                startButton.disabled = false;
+                startButton.textContent = 'Play again';
+                addHighScore(totalScore);
+              } else {
+                gameState = 'respawn';
+                respawnMs = 1000;
+                car.speed = 0;
+              }
+            } else {
+              car.speed += def.speedDelta;
+              if (car.speed > car.maxSpeed + 1.5) car.speed = car.maxSpeed + 1.5;
+              if (car.speed < -2.5) car.speed = -2.5;
+
+              items.splice(i, 1);
+            }
+          }
+        }
+
+        // End of level when all Stories & Features are collected
+        if (gameState === 'running' && !hasRemainingGoodItems()) {
+          finishLevel();
+        }
+      }
+
+      if (gameState === 'respawn') {
+        respawnMs -= dt;
+        if (respawnMs <= 0) {
+          gameState = 'running';
+          car.x = canvas.width / 2;
+          car.y = canvas.height - 80;
+          car.angle = -Math.PI / 2;
+          car.speed = 0;
+        }
+      }
+
+      updateHUD();
+    }
+
+    function drawTrack() {
+      // Outer boundary
+      ctx.strokeStyle = '#555';
+      ctx.lineWidth = 10;
+      ctx.strokeRect(40, 40, canvas.width - 80, canvas.height - 100);
+
+      // Inner path
+      ctx.strokeStyle = '#777';
+      ctx.lineWidth = 4;
+      ctx.setLineDash([14, 10]);
+      ctx.strokeRect(80, 80, canvas.width - 160, canvas.height - 180);
+      ctx.setLineDash([]);
+    }
+
+    function drawCar() {
+      ctx.save();
+      ctx.translate(car.x, car.y);
+      ctx.rotate(car.angle);
+
+      // wake behind the boat
+      ctx.beginPath();
+      ctx.moveTo(-car.width * 0.8, -car.height * 0.6);
+      ctx.lineTo(-car.width * 1.6, 0);
+      ctx.lineTo(-car.width * 0.8, car.height * 0.6);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(129, 212, 250, 0.35)';
+      ctx.fill();
+
+      // hull (pointing in movement direction = +X)
+      ctx.beginPath();
+      ctx.moveTo(car.width / 2, 0); // bow
+      ctx.lineTo(-car.width / 2, -car.height / 2);
+      ctx.lineTo(-car.width / 2, car.height / 2);
+      ctx.closePath();
+      ctx.fillStyle = '#29B6F6';
+      ctx.fill();
+      ctx.strokeStyle = '#01579B';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // small cabin
+      ctx.fillStyle = '#ECEFF1';
+      ctx.fillRect(-car.width * 0.1, -car.height * 0.35, car.width * 0.3, car.height * 0.7);
+
+      ctx.restore();
+    }
+
+    function drawItems() {
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = 'bold 12px system-ui, sans-serif';
+
+      for (const it of items) {
+        const def = itemTypes[it.type];
+        // coin
+        ctx.beginPath();
+        ctx.arc(it.x, it.y, it.r, 0, Math.PI * 2);
+        ctx.fillStyle = def.color;
+        ctx.fill();
+        ctx.strokeStyle = '#222';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // letter
+        ctx.fillStyle = '#000';
+        ctx.fillText(def.label, it.x, it.y + 0.5);
+      }
+    }
+
+    function drawOverlay() {
+      if (gameState === 'countdown') {
+        const secondsLeft = Math.max(0, Math.ceil(countdownMs / 1000));
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        ctx.fillStyle = '#FFF';
+        ctx.font = 'bold 72px system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(secondsLeft, canvas.width / 2, canvas.height / 2);
+      } else if (gameState === 'finished') {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        ctx.fillStyle = '#FFF';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.font = 'bold 32px system-ui, sans-serif';
+
+        if (level === 1) {
+          ctx.fillText('Level 1 Complete!', canvas.width / 2, canvas.height / 2 - 50);
+          ctx.font = '20px system-ui, sans-serif';
+          ctx.fillText(`Time: ${formatTime(elapsedMs)}  •  Level score: ${stats.score}`, canvas.width / 2, canvas.height / 2 - 10);
+          ctx.fillText(
+            `S: ${stats.S}   F: ${stats.F}   D: ${stats.D}   I: ${stats.I}`,
+            canvas.width / 2,
+            canvas.height / 2 + 20
+          );
+          ctx.font = '16px system-ui, sans-serif';
+          ctx.fillText('Press "Start level 2" to continue', canvas.width / 2, canvas.height / 2 + 50);
+        } else if (level === 2) {
+          ctx.fillText('Level 2 Complete!', canvas.width / 2, canvas.height / 2 - 50);
+          ctx.font = '20px system-ui, sans-serif';
+          ctx.fillText(`Time: ${formatTime(elapsedMs)}  •  Level score: ${stats.score}`, canvas.width / 2, canvas.height / 2 - 10);
+          ctx.fillText(
+            `S: ${stats.S}   F: ${stats.F}   D: ${stats.D}   I: ${stats.I}`,
+            canvas.width / 2,
+            canvas.height / 2 + 20
+          );
+          ctx.fillText(`Combined score (L1+L2): ${totalScore}`, canvas.width / 2, canvas.height / 2 + 50);
+          ctx.font = '16px system-ui, sans-serif';
+          ctx.fillText('Press "Start level 3" to continue', canvas.width / 2, canvas.height / 2 + 80);
+        } else {
+          if (runFailed) {
+            ctx.fillText('Game Over', canvas.width / 2, canvas.height / 2 - 50);
+            ctx.font = '20px system-ui, sans-serif';
+            ctx.fillText(`Combined score (L1+L2): ${totalScore}`, canvas.width / 2, canvas.height / 2 - 10);
+            ctx.font = '16px system-ui, sans-serif';
+            ctx.fillText('Press "Play again" to restart', canvas.width / 2, canvas.height / 2 + 30);
+          } else {
+            ctx.fillText('Level 3 Complete!', canvas.width / 2, canvas.height / 2 - 50);
+            ctx.font = '20px system-ui, sans-serif';
+            ctx.fillText(`Time: ${formatTime(elapsedMs)}  •  Level score: ${stats.score}`, canvas.width / 2, canvas.height / 2 - 10);
+            ctx.fillText(
+              `S: ${stats.S}   F: ${stats.F}   D: ${stats.D}   I: ${stats.I}`,
+              canvas.width / 2,
+              canvas.height / 2 + 20
+            );
+            ctx.fillText(`Combined score (L1–L3): ${totalScore}`, canvas.width / 2, canvas.height / 2 + 50);
+            ctx.font = '16px system-ui, sans-serif';
+            ctx.fillText('Press "Play again" to restart', canvas.width / 2, canvas.height / 2 + 80);
+          }
+        }
+      }
+    }
+
+    function loop(timestamp) {
+      if (lastTimestamp == null) lastTimestamp = timestamp;
+      const dt = timestamp - lastTimestamp;
+      lastTimestamp = timestamp;
+
+      update(dt);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      drawTrack();
+      drawItems();
+      drawCar();
+      drawOverlay();
+      requestAnimationFrame(loop);
+    }
+
+    loadHighScores();
+    renderHighScores();
+
+    // initial HUD (including timer)
+    hudTime.textContent = formatTime(0);
+    updateHUD();
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
